@@ -5,3 +5,7 @@
 
 # File Related
 *.zip
+core*
+status*
+Ima*
+*file

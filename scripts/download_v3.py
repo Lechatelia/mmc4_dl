@@ -29,7 +29,7 @@ import urllib
 import braceexpand
 import zipfile
 from PIL import Image
-
+import random 
 
 headers = {
     'User-Agent':'Googlebot-Image/1.0', # Pretend to be googlebot
@@ -43,10 +43,10 @@ def parse_args():
     parser.add_argument('--input_jsonl', type=str, default=None, help='Local path to the input jsonl file')
     parser.add_argument("--input_shards", type=str, default=None, help='URL to shards')
     parser.add_argument('--output_image_dir', type=str, default=None, help='Local path to the directory that stores the downloaded images')
-    parser.add_argument('--num_process', type=int, default=200, help='Number of processes in the pool can be larger than cores')
-    parser.add_argument('--chunk_size', type=int, default=100, help='Number of images per chunk per process')
+    parser.add_argument('--num_process', type=int, default=100, help='Number of processes in the pool can be larger than cores')
+    parser.add_argument('--chunk_size', type=int, default=10, help='Number of images per chunk per process')
     parser.add_argument('--shard_name', type=str, default=None)
-    parser.add_argument('--report_dir', type=str, default='./status_report/', help='Local path to the directory that stores the downloading status')
+    parser.add_argument('--report_dir', type=str, default='./status_corev3/', help='Local path to the directory that stores the downloading status')
     
     args = parser.parse_args()
 
@@ -245,25 +245,48 @@ def local(args):
 def main():
     args = parse_args()
 
-  
-    # for idx in range(5000, 10000): # gpu1-1
-    for idx in range(30, 90): #  gpu1-2
-    # for idx in range(1000, 2000): # gpu1 
-    # for idx in range(2000, 5000): # gpu2 
-    # for idx in range(10000, 15000): # gpu4-0
-    # for idx in range(1, 1000): # gpu4-0
+    
+    path = "/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/corev3"
+    # find all files ends with .jsonl
+    # using glob
+    while True:
+        print('finding files')
+        files = glob.glob(path + "/*.jsonl")
+        file_not_ready = []
+        for file in files:
+            img_save_path =  file.replace("corev3", "images_corev3").replace(".jsonl", "") 
+            
+            # the path not exist or the path is empty
+            if not os.path.exists(img_save_path) or len(os.listdir(img_save_path)) == 0:
+                file_not_ready.append(file)
 
-    # for idx in range(15000, 20000): # gpu4-1
-        args.input_jsonl = f'/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/json_file/docs_no_face_shard_{idx}_v2.jsonl'
 
-        args.input_shards = f'/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/download/docs_no_face_shard_{idx}_v2.zip'
-        args.shard_name = f"shard_{idx}"
+        print('files not ready: ', len(file_not_ready))
+
+        # random sample one file 
+        file = random.choice(file_not_ready)
+
+
+
+
+
+        print(file)
+        
+
+    
+        args.input_jsonl = file # /apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/corev3/docs_no_face_shard_60_v3.jsonl
+        args.input_jsonl = file # /apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/corev3/docs_no_face_shard_56_v3.jsonl
+
+        args.input_shards = file.replace("corev3", "images_corev3").replace(".jsonl", "zip") 
+        args.shard_name = "core3" + file.split("/")[-1].replace(".jsonl", "")
+
+        
         # judge the file is exist or not
         if not os.path.exists(args.input_jsonl):
             continue
 
         # image save path 
-        args.output_image_dir = f'/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/images/docs_no_face_shard_{idx}_v2'
+        args.output_image_dir = file.replace("corev3", "images_corev3").replace(".jsonl", "") 
 
         # Prepare directory
         for _dir in [args.output_image_dir, args.report_dir]:

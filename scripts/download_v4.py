@@ -16,7 +16,10 @@ import pandas as pd
 import requests
 import os
 import shelve
-import magic
+try:
+    import magic
+except:
+    print('python-magic not installed, will not be able to detect image mimetype')
 from multiprocessing import Pool
 import tqdm
 import argparse
@@ -29,7 +32,7 @@ import urllib
 import braceexpand
 import zipfile
 from PIL import Image
-
+import random 
 
 headers = {
     'User-Agent':'Googlebot-Image/1.0', # Pretend to be googlebot
@@ -43,10 +46,12 @@ def parse_args():
     parser.add_argument('--input_jsonl', type=str, default=None, help='Local path to the input jsonl file')
     parser.add_argument("--input_shards", type=str, default=None, help='URL to shards')
     parser.add_argument('--output_image_dir', type=str, default=None, help='Local path to the directory that stores the downloaded images')
-    parser.add_argument('--num_process', type=int, default=200, help='Number of processes in the pool can be larger than cores')
+    parser.add_argument('--num_process', type=int, default=100, help='Number of processes in the pool can be larger than cores')
     parser.add_argument('--chunk_size', type=int, default=100, help='Number of images per chunk per process')
     parser.add_argument('--shard_name', type=str, default=None)
-    parser.add_argument('--report_dir', type=str, default='./status_report/', help='Local path to the directory that stores the downloading status')
+    parser.add_argument('--report_dir', type=str, default='./status_corev3/', help='Local path to the directory that stores the downloading status')
+    parser.add_argument('--start_idx', type=int, default=0, help='Start index of the shards')
+    parser.add_argument('--end_idx', type=int, default=100, help='End index of the shards')
     
     args = parser.parse_args()
 
@@ -98,7 +103,7 @@ def download_images_multiprocess(args, df, func):
         pool_data = ((index, df[i:i + chunk_size], func) for index, i in enumerate(range(0, len(df), chunk_size)) if index not in finished_chunks)
         pbar.write(f'\t{int(len(df) / chunk_size)} parts. Using {num_process} processes.')
 
-        pbar.desc = "Downloading"
+        pbar.desc = f"Downloading_{args.start_idx}_{args.end_idx}"
         with Pool(num_process) as pool:
             for i, result in enumerate(pool.imap_unordered(_df_split_apply, pool_data, 2)):
                 results[str(result[0])] = result
@@ -116,12 +121,15 @@ def _get_local_image_filename(row):
 
 def download_image(row):
     fname = _get_local_image_filename(row)
+    
+    # print(fname)
 
     # Skip already downloaded images, retry others later
     if os.path.isfile(fname):
+        # print(f'File {fname} already exists. Skipping...')
         row['status'] = 200
         row['file'] = fname
-        row['mimetype'] = magic.from_file(row['file'], mime=True)
+        # row['mimetype'] = magic.from_file(row['file'], mime=True)
         row['size'] = os.stat(row['file']).st_size
         return row
 
@@ -135,7 +143,7 @@ def download_image(row):
             response = requests.get(row['url'], stream=False, timeout=10, allow_redirects=True, headers=headers)
             row['status'] = response.status_code
             rate_limit_idx += 1
-            time.sleep(2)
+            time.sleep(0.5)
             if rate_limit_idx == 5:
                 print(f'Reached rate limit for {row["local_identifier"]} ({row["url"]}). Will skip this image for now.')
                 row['status'] = 429
@@ -153,17 +161,17 @@ def download_image(row):
                 response.raw.decode_content = True
                 out_file.write(response.content)
 
-            # Resize image if it is too big
-            call('mogrify -resize "800x800>" {}'.format(fname))
+            # # Resize image if it is too big
+            # call('mogrify -resize "800x800>" {}'.format(fname))
 
-            # Use the following if mogrify doesn't exist or can't be found
-            # img = Image.open(fname)
-            # if max(img.size) > 800:
-            #     img = img.resize((min(img.width, 800), min(img.height, 800)))
-            #     img.save(fname)
+            # # Use the following if mogrify doesn't exist or can't be found
+            img = Image.open(fname)
+            if max(img.size) > 800:
+                img = img.resize((min(img.width, 800), min(img.height, 800)))
+                img.save(fname)
 
 
-            row['mimetype'] = magic.from_file(fname, mime=True)
+            # row['mimetype'] = magic.from_file(fname, mime=True)
             row['size'] = os.stat(fname).st_size
         except:
             # This is if it times out during a download or decode
@@ -192,14 +200,35 @@ def save_status(args, shelve_filename):
 def gather_image_info(args):
     """Gather image info from the input jsonl"""
     data = []
-    with open(args.input_jsonl) as f:
-        for line in tqdm.tqdm(f):
-            info = json.loads(line.strip())
-            for img_item in info['image_info']:
-                data.append({
-                    'local_identifier': img_item['image_name'],
-                    'url': img_item['raw_url'],
-                })
+    for idx in range(args.start_idx, args.end_idx):
+        jsonl_file = args.input_jsonl.format(fileidx=idx)
+        print(f'Processing shard {idx}')
+        output_image_dir = args.output_image_dir.format(fileidx=idx)
+        # skip if file not exist
+        if not os.path.exists(output_image_dir):
+            os.makedirs(output_image_dir)
+        if not os.path.exists(jsonl_file):
+            print(f'File {jsonl_file} does not exist. Skipping...')
+            continue
+
+        with open(jsonl_file) as f:
+            for line in tqdm.tqdm(f):
+                info = json.loads(line.strip())
+                for img_item in info['image_info']:
+                    data.append({
+                        'local_identifier': img_item['image_name'],
+                        'url': img_item['raw_url'],
+                        'folder': output_image_dir # os.path.join(jsonl_file, os.path.basename(jsonl_file).replace('.jsonl', ''))
+                    })
+                # break
+    # with open(args.input_jsonl) as f:
+    #     for line in tqdm.tqdm(f):
+    #         info = json.loads(line.strip())
+    #         for img_item in info['image_info']:
+    #             data.append({
+    #                 'local_identifier': img_item['image_name'],
+    #                 'url': img_item['raw_url'],
+    #             })
     return data
 
 
@@ -220,8 +249,9 @@ def gather_image_info_shard(json_file):
 def local(args):
     # Load image info for current shard
     data = gather_image_info(args)
-    for d in data:
-        d['folder'] = args.output_image_dir
+    # for d in data:
+    #     d['folder'] = args.output_image_dir
+    # import pdb; pdb.set_trace()
     df = pd.DataFrame(data)
 
     # import pdb; pdb.set_trace()
@@ -245,81 +275,80 @@ def local(args):
 def main():
     args = parse_args()
 
-  
-    # for idx in range(5000, 10000): # gpu1-1
-    for idx in range(30, 90): #  gpu1-2
-    # for idx in range(1000, 2000): # gpu1 
-    # for idx in range(2000, 5000): # gpu2 
-    # for idx in range(10000, 15000): # gpu4-0
-    # for idx in range(1, 1000): # gpu4-0
+    
+    args.input_jsonl = "/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/corev3/docs_no_face_shard_{fileidx}_v3.jsonl"
+    # find all files ends with .jsonl
+    # using glob
+ 
+    print(f'down file  file from {args.start_idx} to {args.end_idx}')
 
-    # for idx in range(15000, 20000): # gpu4-1
-        args.input_jsonl = f'/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/json_file/docs_no_face_shard_{idx}_v2.jsonl'
+      
+        
 
-        args.input_shards = f'/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/download/docs_no_face_shard_{idx}_v2.zip'
-        args.shard_name = f"shard_{idx}"
-        # judge the file is exist or not
-        if not os.path.exists(args.input_jsonl):
-            continue
+    args.input_shards = args.shard_name = "core3" + f"{args.start_idx}_{args.end_idx}"
 
-        # image save path 
-        args.output_image_dir = f'/apdcephfs_cq2/share_1290939/0_public_datasets/mmc4/images/docs_no_face_shard_{idx}_v2'
 
-        # Prepare directory
-        for _dir in [args.output_image_dir, args.report_dir]:
-            if not os.path.exists(_dir):
-                os.makedirs(_dir)
+    # image save path 
+    args.output_image_dir = args.input_jsonl.replace("corev3", "images_corev3").replace(".jsonl", "") 
 
-        print('jsonl file path: ', args.input_jsonl)
-        print('image save path: ', args.output_image_dir)
+    # Prepare directory
+    for _dir in [args.report_dir]:
+        if not os.path.exists(_dir):
+            os.makedirs(_dir)
 
-        if args.input_jsonl is not None:
-            local(args=args)
-        else:
-            doc_shards = list(braceexpand.braceexpand(args.input_shards))
+    print('jsonl file path: ', args.input_jsonl)
+    print('image save path: ', args.output_image_dir)
 
-            for idx in range(len(doc_shards)):
-                # image_tar = tarfile.open(image_shards[idx])
-                print("Downloading zip for shard", idx)
-                try:
-                    urllib.request.urlretrieve(doc_shards[idx], "temp.zip")
+    if args.input_jsonl is not None:
+        local(args=args)
+    else:
+        doc_shards = list(braceexpand.braceexpand(args.input_shards))
 
-                    # Open the ZIP archive and extract the JSON file
-                    with zipfile.ZipFile("temp.zip", "r") as zip_file:
-                        # Assumes the JSON file is the first file in the archive
-                        json_filename = zip_file.namelist()[0]
-                        with zip_file.open(json_filename, "r") as json_file:
-                            data = gather_image_info_shard(json_file)
+        for idx in range(len(doc_shards)):
+            # image_tar = tarfile.open(image_shards[idx])
+            print("Downloading zip for shard", idx)
+            try:
+                urllib.request.urlretrieve(doc_shards[idx], "temp.zip")
 
-                        shard_folder = args.output_image_dir + "/" + str(idx)
-                        if not os.path.exists(shard_folder):
-                            os.makedirs(shard_folder)
-                        
-                        for d in data:
-                            d['folder'] = shard_folder
+                # Open the ZIP archive and extract the JSON file
+                with zipfile.ZipFile("temp.zip", "r") as zip_file:
+                    # Assumes the JSON file is the first file in the archive
+                    json_filename = zip_file.namelist()[0]
+                    with zip_file.open(json_filename, "r") as json_file:
+                        data = gather_image_info_shard(json_file)
 
-                        df = pd.DataFrame(data)
+                    shard_folder = args.output_image_dir + "/" + str(idx)
+                    if not os.path.exists(shard_folder):
+                        os.makedirs(shard_folder)
+                    
+                    for d in data:
+                        d['folder'] = shard_folder
 
-                        args.shard_name = idx
+                    df = pd.DataFrame(data)
 
-                        # Download images
-                        shelve_filename = download_images_multiprocess(
-                            args=args, 
-                            df=df,
-                            func=download_image,
-                        )
-                        
-                        # Save status & cleaning up
-                        save_status(
-                            args=args,
-                            shelve_filename=shelve_filename,
-                        )
+                    args.shard_name = idx
 
-                except urllib.error.HTTPError as e:
-                    print(e)
-                    print("Skipping shard", idx)
-                    continue
+                    # Download images
+                    shelve_filename = download_images_multiprocess(
+                        args=args, 
+                        df=df,
+                        func=download_image,
+                    )
+                    
+                    # Save status & cleaning up
+                    save_status(
+                        args=args,
+                        shelve_filename=shelve_filename,
+                    )
+
+            except urllib.error.HTTPError as e:
+                print(e)
+                print("Skipping shard", idx)
+                continue
 
 
 if __name__ == '__main__':
     main()
+
+
+    # python3 scripts/download_v4.py --start_idx 100 --end_idx 1000
